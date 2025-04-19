@@ -3,12 +3,10 @@ from torch.utils.data import Dataset, DataLoader
 import numpy as np
 import spacy
 from collections import Counter
-from tqdm.notebook import tqdm
+from tqdm import tqdm
 
 # Load spaCy for tokenization and lemmatization
 nlp = spacy.load("en_core_web_sm")
-
-
 
 
 class TextPreprocessor:
