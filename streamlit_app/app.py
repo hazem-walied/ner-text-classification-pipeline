@@ -190,102 +190,77 @@ def ensure_all_tags_exist(idx2tag, max_tag_id=15):
 def visualize_ner(tokens, tags, idx2tag):
     """
     Create a simple, directly aligned HTML representation of NER tags.
-    Ensures all tokens are properly visualized, including first and last.
+    Uses only the model's predictions without any predefined entity lists.
     """
-    # Create HTML for visualization with direct token-by-token approach
+    # Create HTML for visualization
     html = '<div style="line-height: 2.5; font-size: 16px;">'
     
-    
-    
-    # First pass: identify multi-token entities
-    multi_token_entities = []
+    # First, let's identify entity spans from the model's predictions
+    entity_spans = []
     current_entity = None
     start_idx = None
     
-    for i, token in enumerate(tokens):
-        # Get the tag for this token
-        if i < len(tags[0]):
-            tag_idx = tags[0][i]
-            tag_id = tag_idx.item() if isinstance(tag_idx, torch.Tensor) else tag_idx
-            
-            if tag_id in idx2tag:
-                tag = idx2tag[tag_id]
-            else:
-                tag = "O"
-            
-            # Skip special tags in visualization
-            if tag in ["<PAD>", "<START>", "<STOP>"] or tag.startswith("Unknown-"):
-                tag = "O"
+    for i, tag_idx in enumerate(tags[0]):
+        tag_id = tag_idx.item() if isinstance(tag_idx, torch.Tensor) else tag_idx
+        
+        if tag_id in idx2tag:
+            tag = idx2tag[tag_id]
         else:
             tag = "O"
         
-        # Check for well-known entities
-        token_lower = token.lower()
+        # Skip special tags
+        if tag in ["<PAD>", "<START>", "<STOP>"] or tag.startswith("Unknown-"):
+            tag = "O"
         
-        
-        # Handle entity boundaries
+        # Handle B- tags (beginning of entity)
         if tag.startswith("B-"):
             if current_entity:
-                multi_token_entities.append((start_idx, i-1, current_entity))
+                entity_spans.append((start_idx, i-1, current_entity))
             current_entity = tag[2:]
             start_idx = i
-        elif tag.startswith("I-") and current_entity == tag[2:]:
-            # Continue current entity
-            pass
-        elif tag == "O" or tag.startswith("I-"):
+        # Handle I- tags (inside entity)
+        elif tag.startswith("I-"):
+            if current_entity and current_entity == tag[2:]:
+                # Continue current entity
+                pass
+            elif current_entity:
+                # End previous entity and start new one
+                entity_spans.append((start_idx, i-1, current_entity))
+                current_entity = tag[2:]
+                start_idx = i
+            else:
+                # Start new entity with I- tag
+                current_entity = tag[2:]
+                start_idx = i
+        # Handle O tags (outside entity)
+        elif tag == "O":
             if current_entity:
-                multi_token_entities.append((start_idx, i-1, current_entity))
+                entity_spans.append((start_idx, i-1, current_entity))
                 current_entity = None
     
     # Add the last entity if there is one
     if current_entity:
-        multi_token_entities.append((start_idx, len(tokens)-1, current_entity))
+        entity_spans.append((start_idx, len(tags[0])-1, current_entity))
     
-    # Second pass: render tokens with their tags
+    # Now render the tokens with their entity tags
     i = 0
     while i < len(tokens):
-        # Check if this token is part of a multi-token entity
-        is_part_of_entity = False
-        for start, end, entity_type in multi_token_entities:
+        # Check if this token is part of an entity span
+        in_entity = False
+        for start, end, entity_type in entity_spans:
             if start <= i <= end:
                 if i == start:  # First token of the entity
+                    # Get all tokens in this entity
                     entity_text = " ".join(tokens[start:end+1])
                     color = get_color(f"B-{entity_type}")
-                    html += f'<span style="background-color: {color}; padding: 3px 5px; border-radius: 4px; margin: 0 2px;"><b>{entity_type}</b>: {entity_text}</span> '
-                is_part_of_entity = True
-                break
+                    html += f'<span style="background-color: {color}; padding: 3px 5px; border-radius: 4px; margin: 0 2px; color: black;"><b style="color: #333;">{entity_type}</b>: {entity_text}</span> '
+                    i = end + 1  # Skip to the end of the entity
+                    in_entity = True
+                    break
         
-        if is_part_of_entity:
-            i = end + 1  # Skip to the end of the entity
-            continue
-        
-        # Get the tag for this token
-        if i < len(tags[0]):
-            tag_idx = tags[0][i]
-            tag_id = tag_idx.item() if isinstance(tag_idx, torch.Tensor) else tag_idx
-            
-            if tag_id in idx2tag:
-                tag = idx2tag[tag_id]
-            else:
-                tag = "O"
-            
-            # Skip special tags in visualization
-            if tag in ["<PAD>", "<START>", "<STOP>"] or tag.startswith("Unknown-"):
-                tag = "O"
-        else:
-            tag = "O"
-        
-        # Check for well-known entities
-        token_lower = tokens[i].lower()
-        
-        if tag != "O":
-            entity_type = tag[2:] if tag.startswith("B-") or tag.startswith("I-") else tag
-            color = get_color(tag)
-            html += f'<span style="background-color: {color}; padding: 3px 5px; border-radius: 4px; margin: 0 2px;"><b>{entity_type}</b>: {tokens[i]}</span> '
-        else:
+        if not in_entity:
             html += f'{tokens[i]} '
-        
-        i += 1
+            i += 1
     
     html += '</div>'
     
