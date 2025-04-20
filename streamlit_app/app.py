@@ -1,65 +1,96 @@
+# streamlit_app/app.py
 import streamlit as st
 import torch
 import numpy as np
 import spacy
 import matplotlib.pyplot as plt
-import seaborn as sns
 from PIL import Image
 import io
 import sys
 import os
+import pickle
+
+# Add the src directory to the path so we can import our modules
 sys.path.append(os.path.abspath('../src'))
 from models.bilstm_crf import BiLSTM_CRF
 from models.text_classifier import TextClassifier
-from datasets import load_dataset
-from preprocessing.text_processor import TextClassificationDataset,NERDataset,TextPreprocessor,create_data_loaders
 
+# Define paths
+DATA_DIR = '../data'
+VOCAB_FILE = os.path.join(DATA_DIR, 'vocab_data.pkl')
+PREPROCESSOR_FILE = os.path.join(DATA_DIR, 'text_preprocessor.pkl')
+NER_MODEL_FILE = '../models/bilstm_crf_ner.pt'
+TEXT_MODEL_FILE = '../models/text_classifier.pt'
 
 # Load spaCy
-nlp = spacy.load("en_core_web_sm")
-
-
-
-# Load NER dataset
-ner_dataset = load_dataset("conll2003")
-
-# Load text classification dataset
-text_classification_dataset = load_dataset("ag_news")
-
-ner_train_dataset = NERDataset(ner_dataset['train'])
-ner_val_dataset = NERDataset(ner_dataset['validation'])
-
-text_preprocessor = TextPreprocessor(remove_stopwords=True, lemmatize=True)
-text_train_dataset = TextClassificationDataset(text_classification_dataset['train'], preprocessor=text_preprocessor)
-text_val_dataset = TextClassificationDataset(text_classification_dataset['test'], preprocessor=text_preprocessor)
-
-
-
-
-# Load models and preprocessing
 @st.cache_resource
-def load_models():
+def load_spacy():
+    return spacy.load("en_core_web_sm")
+
+nlp = load_spacy()
+
+# Load vocabulary data
+@st.cache_resource
+def load_vocab_data():
+    """Load vocabulary and other necessary data from disk."""
+    if not os.path.exists(VOCAB_FILE):
+        st.error(f"Vocabulary file {VOCAB_FILE} not found. Please run prepare_data.py first.")
+        return None
+    
+    with open(VOCAB_FILE, 'rb') as f:
+        data = pickle.load(f)
+    
+    return data
+
+# Load text preprocessor
+@st.cache_resource
+def load_preprocessor():
+    """Load text preprocessor from disk."""
+    if not os.path.exists(PREPROCESSOR_FILE):
+        st.error(f"Preprocessor file {PREPROCESSOR_FILE} not found. Please run prepare_data.py first.")
+        return None
+    
+    with open(PREPROCESSOR_FILE, 'rb') as f:
+        preprocessor = pickle.load(f)
+    
+    return preprocessor
+
+# Load models
+@st.cache_resource
+def load_models(vocab_data):
+    """Load NER and text classification models."""
     # Load NER model
     ner_model = BiLSTM_CRF(
-        vocab_size=len(ner_train_dataset.word2idx),
-        tag_to_ix=ner_train_dataset.tag2idx,
+        vocab_size=len(vocab_data['ner_word2idx']),
+        tag_to_ix=vocab_data['ner_tag2idx'],
         embedding_dim=100,
         hidden_dim=256,
         num_layers=2,
         dropout=0.5
     )
-    ner_model.load_state_dict(torch.load('bilstm_crf_ner.pt', map_location=torch.device('cpu')))
-    ner_model.eval()
     
     # Load text classification model
     text_model = TextClassifier(
-        vocab_size=len(text_train_dataset.word2idx),
+        vocab_size=len(vocab_data['text_word2idx']),
         embedding_dim=100,
         hidden_dim=128,
-        num_classes=text_train_dataset.num_classes,
+        num_classes=vocab_data['num_classes'],
         dropout=0.5
     )
-    text_model.load_state_dict(torch.load('text_classifier.pt', map_location=torch.device('cpu')))
+    
+    # Load model weights if they exist
+    if os.path.exists(NER_MODEL_FILE):
+        ner_model.load_state_dict(torch.load(NER_MODEL_FILE, map_location=torch.device('cpu')))
+    else:
+        st.warning(f"NER model file {NER_MODEL_FILE} not found. Using untrained model.")
+    
+    if os.path.exists(TEXT_MODEL_FILE):
+        text_model.load_state_dict(torch.load(TEXT_MODEL_FILE, map_location=torch.device('cpu')))
+    else:
+        st.warning(f"Text classification model file {TEXT_MODEL_FILE} not found. Using untrained model.")
+    
+    # Set models to evaluation mode
+    ner_model.eval()
     text_model.eval()
     
     return ner_model, text_model
@@ -199,8 +230,20 @@ def plot_classification_probs(probs, class_names):
 def main():
     st.title("NER & Text Classification Pipeline")
     
+    # Load vocabulary data
+    vocab_data = load_vocab_data()
+    if vocab_data is None:
+        st.error("Failed to load vocabulary data. Please check the console for details.")
+        return
+    
+    # Load preprocessor
+    preprocessor = load_preprocessor()
+    if preprocessor is None:
+        st.error("Failed to load text preprocessor. Please check the console for details.")
+        return
+    
     # Load models
-    ner_model, text_model = load_models()
+    ner_model, text_model = load_models(vocab_data)
     
     # Sidebar
     st.sidebar.title("About")
@@ -209,7 +252,7 @@ def main():
         "\n\n"
         "- Named Entity Recognition using a custom BiLSTM-CRF model"
         "\n"
-        "- Text Classification using both classical ML (TF-IDF + SVM) and neural networks"
+        "- Text Classification using a neural network model"
     )
     
     # Text input
@@ -220,14 +263,14 @@ def main():
             # Process text
             with st.spinner("Processing text..."):
                 # NER
-                ner_processed = preprocess_for_ner(text_input, ner_train_dataset.word2idx)
+                ner_processed = preprocess_for_ner(text_input, vocab_data['ner_word2idx'])
                 ner_tags = ner_model(ner_processed['input_ids'], ner_processed['attention_mask'])
                 
                 # Text Classification
                 text_processed = preprocess_for_classification(
                     text_input, 
-                    text_preprocessor, 
-                    text_train_dataset.word2idx
+                    preprocessor, 
+                    vocab_data['text_word2idx']
                 )
                 with torch.no_grad():
                     logits = text_model(text_processed['input_ids'], text_processed['attention_mask'])
@@ -235,16 +278,15 @@ def main():
                 
                 # Display results
                 st.subheader("Named Entity Recognition")
-                ner_html = visualize_ner(ner_processed['tokens'], ner_tags, ner_train_dataset.idx2tag)
+                ner_html = visualize_ner(ner_processed['tokens'], ner_tags, vocab_data['ner_idx2tag'])
                 st.markdown(ner_html, unsafe_allow_html=True)
                 
                 st.subheader("Document Classification")
-                class_names = text_classification_dataset['train'].features['label'].names
-                prob_img = plot_classification_probs(probs, class_names)
+                prob_img = plot_classification_probs(probs, vocab_data['class_names'])
                 st.image(prob_img)
                 
                 # Show predicted class
-                pred_class = class_names[np.argmax(probs)]
+                pred_class = vocab_data['class_names'][np.argmax(probs)]
                 st.success(f"Predicted class: {pred_class} (Confidence: {np.max(probs):.4f})")
         else:
             st.error("Please enter some text to analyze.")
