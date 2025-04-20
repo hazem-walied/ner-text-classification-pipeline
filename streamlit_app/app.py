@@ -4,6 +4,7 @@ import torch
 import numpy as np
 import spacy
 import matplotlib.pyplot as plt
+import seaborn as sns
 from PIL import Image
 import io
 import sys
@@ -78,16 +79,18 @@ def load_models(vocab_data):
         dropout=0.5
     )
     
-    # Load model weights if they exist
-    if os.path.exists(NER_MODEL_FILE):
+    # Load model weights
+    try:
         ner_model.load_state_dict(torch.load(NER_MODEL_FILE, map_location=torch.device('cpu')))
-    else:
-        st.warning(f"NER model file {NER_MODEL_FILE} not found. Using untrained model.")
+        print(f"Loaded NER model from {NER_MODEL_FILE}")
+    except Exception as e:
+        st.warning(f"Could not load NER model: {e}. Using untrained model.")
     
-    if os.path.exists(TEXT_MODEL_FILE):
+    try:
         text_model.load_state_dict(torch.load(TEXT_MODEL_FILE, map_location=torch.device('cpu')))
-    else:
-        st.warning(f"Text classification model file {TEXT_MODEL_FILE} not found. Using untrained model.")
+        print(f"Loaded text classification model from {TEXT_MODEL_FILE}")
+    except Exception as e:
+        st.warning(f"Could not load text classification model: {e}. Using untrained model.")
     
     # Set models to evaluation mode
     ner_model.eval()
@@ -233,13 +236,13 @@ def main():
     # Load vocabulary data
     vocab_data = load_vocab_data()
     if vocab_data is None:
-        st.error("Failed to load vocabulary data. Please check the console for details.")
+        st.error("Failed to load vocabulary data. Please run prepare_data.py first.")
         return
     
     # Load preprocessor
     preprocessor = load_preprocessor()
     if preprocessor is None:
-        st.error("Failed to load text preprocessor. Please check the console for details.")
+        st.error("Failed to load text preprocessor. Please run prepare_data.py first.")
         return
     
     # Load models

@@ -13,6 +13,7 @@ from models.text_classifier import TextClassifier
 
 # Define paths
 DATA_DIR = 'data'
+os.makedirs(DATA_DIR, exist_ok=True)
 VOCAB_FILE = os.path.join(DATA_DIR, 'vocab_data.pkl')
 
 def prepare_data():
@@ -36,6 +37,9 @@ def prepare_data():
             if token not in ner_word2idx:
                 ner_word2idx[token] = len(ner_word2idx)
     
+    # Get NER tags from your existing implementation
+    # This assumes your BiLSTM_CRF model has a predefined tag set
+    # If not, extract it from the dataset
     ner_tag2idx = {"O": 0, "B-PER": 1, "I-PER": 2, "B-ORG": 3, "I-ORG": 4, 
                   "B-LOC": 5, "I-LOC": 6, "B-MISC": 7, "I-MISC": 8}
     ner_idx2tag = {v: k for k, v in ner_tag2idx.items()}
@@ -51,9 +55,6 @@ def prepare_data():
     # Get class names
     class_names = text_classification_dataset['train'].features['label'].names
     num_classes = len(class_names)
-    
-    # Create directory if it doesn't exist
-    os.makedirs(DATA_DIR, exist_ok=True)
     
     # Save to disk
     with open(VOCAB_FILE, 'wb') as f:
@@ -78,8 +79,6 @@ def prepare_data():
     print(f"NER vocabulary size: {len(ner_word2idx)}")
     print(f"Text classification vocabulary size: {len(text_word2idx)}")
     print(f"Number of classes: {num_classes}")
-    
-    return ner_word2idx, ner_tag2idx, text_word2idx, num_classes
 
 if __name__ == "__main__":
     prepare_data()
