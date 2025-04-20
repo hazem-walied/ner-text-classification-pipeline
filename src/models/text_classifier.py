@@ -38,6 +38,59 @@ class TextClassifier(nn.Module):
         logits = self.fc2(hidden)
         
         return logits
+    
+    def load_pretrained(self, state_dict):
+        """
+        Load pretrained weights even when sizes don't match perfectly.
+        This handles cases where the vocabulary size has changed.
+        """
+        model_state_dict = self.state_dict()
+        pretrained_state_dict = {}
+        
+        # For each parameter in the model
+        for name, param in model_state_dict.items():
+            if name in state_dict:
+                pretrained_param = state_dict[name]
+                
+                # Handle embedding weights
+                if name == 'embedding.weight':
+                    # Copy weights for tokens that exist in both vocabularies
+                    min_vocab = min(param.shape[0], pretrained_param.shape[0])
+                    param.data[:min_vocab] = pretrained_param[:min_vocab]
+                    pretrained_state_dict[name] = param
+                    print(f"Loaded {min_vocab}/{param.shape[0]} embedding weights")
+                
+                # Handle fc1 weights
+                elif name == 'fc1.weight' or name == 'fc1.bias':
+                    if param.shape == pretrained_param.shape:
+                        pretrained_state_dict[name] = pretrained_param
+                        print(f"Loaded {name} with shape {param.shape}")
+                    else:
+                        print(f"Skipped {name}: shape mismatch {param.shape} vs {pretrained_param.shape}")
+                
+                # Handle fc2 weights
+                elif name == 'fc2.weight' or name == 'fc2.bias':
+                    if param.shape == pretrained_param.shape:
+                        pretrained_state_dict[name] = pretrained_param
+                        print(f"Loaded {name} with shape {param.shape}")
+                    else:
+                        print(f"Skipped {name}: shape mismatch {param.shape} vs {pretrained_param.shape}")
+                
+                # For other parameters, only load if shapes match exactly
+                elif param.shape == pretrained_param.shape:
+                    pretrained_state_dict[name] = pretrained_param
+                    print(f"Loaded {name} with shape {param.shape}")
+                else:
+                    print(f"Skipped {name}: shape mismatch {param.shape} vs {pretrained_param.shape}")
+            else:
+                print(f"Parameter {name} not found in pretrained weights")
+        
+        # Load the filtered state dictionary
+        self.load_state_dict(pretrained_state_dict, strict=False)
+        print("Loaded pretrained weights with adaptations for size mismatches")
+        
+        return self
+
 
 def train_text_classifier(model, train_loader, val_loader, device, epochs=5, lr=0.001):
     criterion = nn.CrossEntropyLoss()

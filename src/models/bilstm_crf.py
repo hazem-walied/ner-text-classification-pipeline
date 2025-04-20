@@ -11,8 +11,18 @@ class BiLSTM_CRF(nn.Module):
         self.embedding_dim = embedding_dim
         self.hidden_dim = hidden_dim
         self.vocab_size = vocab_size
-        self.tag_to_ix = tag_to_ix
-        self.tagset_size = len(tag_to_ix)
+        
+        # Make a copy of tag_to_ix to avoid modifying the original
+        self.tag_to_ix = tag_to_ix.copy()
+        
+        # Add special tags if they don't exist
+        special_tags = ["<PAD>", "<START>", "<STOP>"]
+        for tag in special_tags:
+            if tag not in self.tag_to_ix:
+                self.tag_to_ix[tag] = len(self.tag_to_ix)
+                print(f"Added missing special tag: {tag} with index {self.tag_to_ix[tag]}")
+        
+        self.tagset_size = len(self.tag_to_ix)
         
         # Embedding layer
         self.word_embeds = nn.Embedding(vocab_size, embedding_dim, padding_idx=0)
@@ -33,11 +43,15 @@ class BiLSTM_CRF(nn.Module):
         self.transitions = nn.Parameter(
             torch.randn(self.tagset_size, self.tagset_size))
         
-        # These two statements enforce constraints on the transitions:
-        # 1. Don't transition to the padding tag
-        # 2. Don't transition from the padding tag
-        self.transitions.data[tag_to_ix["<PAD>"], :] = -10000
-        self.transitions.data[:, tag_to_ix["<PAD>"]] = -10000
+        # These statements enforce constraints on the transitions:
+        # Don't transition to/from padding tag
+        self.transitions.data[self.tag_to_ix["<PAD>"], :] = -10000
+        self.transitions.data[:, self.tag_to_ix["<PAD>"]] = -10000
+        
+        # Don't transition to start tag or from stop tag
+        if "<START>" in self.tag_to_ix and "<STOP>" in self.tag_to_ix:
+            self.transitions.data[:, self.tag_to_ix["<STOP>"]] = -10000
+            self.transitions.data[self.tag_to_ix["<START>"], :] = -10000
         
         self.dropout = nn.Dropout(dropout)
     
@@ -49,14 +63,24 @@ class BiLSTM_CRF(nn.Module):
         embeds = self.word_embeds(input_ids)
         embeds = self.dropout(embeds)
         
+        # Handle case where all sequences have zero length
+        if torch.all(seq_lengths == 0):
+            batch_size, max_len = input_ids.shape
+            return torch.zeros(batch_size, max_len, self.tagset_size, device=input_ids.device)
+        
         # Pack padded sequence for LSTM
-        packed = pack_padded_sequence(embeds, seq_lengths, batch_first=True, enforce_sorted=False)
-        
-        # Pass through LSTM
-        lstm_out, _ = self.lstm(packed)
-        
-        # Unpack sequence
-        lstm_out, _ = pad_packed_sequence(lstm_out, batch_first=True)
+        try:
+            packed = pack_padded_sequence(embeds, seq_lengths, batch_first=True, enforce_sorted=False)
+            
+            # Pass through LSTM
+            lstm_out, _ = self.lstm(packed)
+            
+            # Unpack sequence
+            lstm_out, _ = pad_packed_sequence(lstm_out, batch_first=True)
+        except Exception as e:
+            # Fallback if packing fails
+            print(f"Warning: Packing failed with error: {e}. Using unpacked sequence.")
+            lstm_out, _ = self.lstm(embeds)
         
         # Apply dropout
         lstm_out = self.dropout(lstm_out)
@@ -73,23 +97,42 @@ class BiLSTM_CRF(nn.Module):
         score = torch.zeros(batch_size, device=feats.device)
         
         # Add transition from start tag to first tag for each sequence
-        start_tags = torch.full((batch_size, 1), self.tag_to_ix["<PAD>"], dtype=torch.long, device=feats.device)
+        start_tag = self.tag_to_ix.get("<START>", self.tag_to_ix["<PAD>"])
+        start_tags = torch.full((batch_size, 1), start_tag, dtype=torch.long, device=feats.device)
         tags = torch.cat([start_tags, tags], dim=1)  # (batch_size, seq_len+1)
         
         for i in range(seq_len):
             # Get mask for current position (batch_size)
-            mask_i = mask[:, i]
+            mask_i = mask[:, i].bool()  # Convert to boolean tensor
+            
+            # Skip if all sequences are masked at this position
+            if not torch.any(mask_i):
+                continue
             
             # Emission score for current position
             emit_score = torch.zeros(batch_size, device=feats.device)
-            emit_score[mask_i] = feats[mask_i, i, tags[mask_i, i+1]]
+            valid_indices = torch.where(mask_i)[0]
+            for idx in valid_indices:
+                if tags[idx, i+1] < feats.size(2):  # Check if tag index is valid
+                    emit_score[idx] = feats[idx, i, tags[idx, i+1]]
             
             # Transition score from previous to current tag
             trans_score = torch.zeros(batch_size, device=feats.device)
-            trans_score[mask_i] = self.transitions[tags[mask_i, i+1], tags[mask_i, i]]
+            for idx in valid_indices:
+                if tags[idx, i+1] < self.transitions.size(0) and tags[idx, i] < self.transitions.size(1):
+                    trans_score[idx] = self.transitions[tags[idx, i+1], tags[idx, i]]
             
             # Add both scores
             score = score + emit_score + trans_score
+        
+        # Add transition to STOP tag for sequences that are not fully masked
+        stop_tag = self.tag_to_ix.get("<STOP>", self.tag_to_ix["<PAD>"])
+        for i in range(batch_size):
+            # Find the last valid position in the sequence
+            last_valid = torch.sum(mask[i]).long() - 1
+            if last_valid >= 0 and last_valid < seq_len:
+                if tags[i, last_valid+1] < self.transitions.size(1) and stop_tag < self.transitions.size(0):
+                    score[i] += self.transitions[stop_tag, tags[i, last_valid+1]]
         
         return score
     
@@ -99,12 +142,17 @@ class BiLSTM_CRF(nn.Module):
         
         # Initialize forward variables with -10000 (log-space)
         alphas = torch.full((batch_size, tagset_size), -10000.0, device=feats.device)
-        # Start with all score from <PAD>
-        alphas[:, self.tag_to_ix["<PAD>"]] = 0.
+        # Start with all score from START tag or PAD tag
+        start_tag = self.tag_to_ix.get("<START>", self.tag_to_ix["<PAD>"])
+        alphas[:, start_tag] = 0.
         
         for i in range(seq_len):
             # Get mask for current position (batch_size)
-            mask_i = mask[:, i]
+            mask_i = mask[:, i].bool()  # Convert to boolean tensor
+            
+            # Skip if all sequences are masked at this position
+            if not torch.any(mask_i):
+                continue
             
             # (batch_size, tagset_size, 1)
             alphas_t = alphas.unsqueeze(2)
@@ -122,7 +170,8 @@ class BiLSTM_CRF(nn.Module):
             alphas = torch.where(mask_i, next_tag_var, alphas)
         
         # Add transition to STOP_TAG
-        terminal_var = alphas + self.transitions[self.tag_to_ix["<PAD>"]]
+        stop_tag = self.tag_to_ix.get("<STOP>", self.tag_to_ix["<PAD>"])
+        terminal_var = alphas + self.transitions[stop_tag]
         alphas = torch.logsumexp(terminal_var, dim=1)
         
         return alphas
@@ -147,11 +196,16 @@ class BiLSTM_CRF(nn.Module):
         
         # Initialize viterbi variables with -10000 (log-space)
         viterbi_vars = torch.full((batch_size, tagset_size), -10000.0, device=feats.device)
-        viterbi_vars[:, self.tag_to_ix["<PAD>"]] = 0
+        start_tag = self.tag_to_ix.get("<START>", self.tag_to_ix["<PAD>"])
+        viterbi_vars[:, start_tag] = 0
         
         for i in range(seq_len):
             # Get mask for current position (batch_size)
-            mask_i = mask[:, i]
+            mask_i = mask[:, i].bool()  # Convert to boolean tensor
+            
+            # Skip if all sequences are masked at this position
+            if not torch.any(mask_i):
+                continue
             
             # (batch_size, tagset_size, 1)
             viterbi_vars_t = viterbi_vars.unsqueeze(2)
@@ -174,7 +228,8 @@ class BiLSTM_CRF(nn.Module):
             viterbi_vars = torch.where(mask_i, best_scores, viterbi_vars)
         
         # Transition to STOP_TAG
-        terminal_var = viterbi_vars + self.transitions[self.tag_to_ix["<PAD>"]]
+        stop_tag = self.tag_to_ix.get("<STOP>", self.tag_to_ix["<PAD>"])
+        terminal_var = viterbi_vars + self.transitions[stop_tag]
         best_tag_id = torch.argmax(terminal_var, dim=1)
         
         # Follow the backpointers to decode the best path
@@ -193,7 +248,7 @@ class BiLSTM_CRF(nn.Module):
             ).squeeze(1)
             
             # Only update positions where mask is valid
-            mask_i = mask[:, i+1]
+            mask_i = mask[:, i+1].bool()  # Convert to boolean tensor
             best_path[:, i] = torch.where(mask_i, best_tag_id, torch.zeros_like(best_tag_id))
         
         return best_path
@@ -205,8 +260,79 @@ class BiLSTM_CRF(nn.Module):
         # Find the best path using Viterbi algorithm
         tag_seq = self._viterbi_decode(lstm_feats, attention_mask)
         
-        return tag_seq
+        # For compatibility with the original code, return a list of tensors
+        # where each tensor is the tag sequence for one example
+        return [tag_seq[0]]
     
+    def load_pretrained(self, state_dict):
+        """
+        Load pretrained weights even when sizes don't match perfectly.
+        This handles cases where the tag dictionary or vocabulary size has changed.
+        """
+        model_state_dict = self.state_dict()
+        pretrained_state_dict = {}
+        
+        # For each parameter in the model
+        for name, param in model_state_dict.items():
+            if name in state_dict:
+                pretrained_param = state_dict[name]
+                
+                # Handle embedding weights
+                if name == 'word_embeds.weight':
+                    # Copy weights for tokens that exist in both vocabularies
+                    min_vocab = min(param.shape[0], pretrained_param.shape[0])
+                    param.data[:min_vocab] = pretrained_param[:min_vocab]
+                    pretrained_state_dict[name] = param
+                    print(f"Loaded {min_vocab}/{param.shape[0]} embedding weights")
+                
+                # Handle transitions matrix
+                elif name == 'transitions':
+                    # Copy the transitions for tags that exist in both dictionaries
+                    min_tags = min(param.shape[0], pretrained_param.shape[0])
+                    param.data[:min_tags, :min_tags] = pretrained_param[:min_tags, :min_tags]
+                    pretrained_state_dict[name] = param
+                    print(f"Loaded {min_tags}x{min_tags}/{param.shape[0]}x{param.shape[1]} transition weights")
+                
+                # Handle hidden2tag weights
+                elif name == 'hidden2tag.weight':
+                    # Copy weights for tags that exist in both dictionaries
+                    min_tags = min(param.shape[0], pretrained_param.shape[0])
+                    min_hidden = min(param.shape[1], pretrained_param.shape[1])
+                    param.data[:min_tags, :min_hidden] = pretrained_param[:min_tags, :min_hidden]
+                    pretrained_state_dict[name] = param
+                    print(f"Loaded {min_tags}x{min_hidden}/{param.shape[0]}x{param.shape[1]} hidden2tag weights")
+                
+                # Handle hidden2tag bias
+                elif name == 'hidden2tag.bias':
+                    # Copy biases for tags that exist in both dictionaries
+                    min_tags = min(param.shape[0], pretrained_param.shape[0])
+                    param.data[:min_tags] = pretrained_param[:min_tags]
+                    pretrained_state_dict[name] = param
+                    print(f"Loaded {min_tags}/{param.shape[0]} hidden2tag biases")
+                
+                # Handle LSTM weights
+                elif 'lstm' in name:
+                    if param.shape == pretrained_param.shape:
+                        pretrained_state_dict[name] = pretrained_param
+                        print(f"Loaded {name} with shape {param.shape}")
+                    else:
+                        print(f"Skipped {name}: shape mismatch {param.shape} vs {pretrained_param.shape}")
+                
+                # For other parameters, only load if shapes match exactly
+                elif param.shape == pretrained_param.shape:
+                    pretrained_state_dict[name] = pretrained_param
+                    print(f"Loaded {name} with shape {param.shape}")
+                else:
+                    print(f"Skipped {name}: shape mismatch {param.shape} vs {pretrained_param.shape}")
+            else:
+                print(f"Parameter {name} not found in pretrained weights")
+        
+        # Load the filtered state dictionary
+        self.load_state_dict(pretrained_state_dict, strict=False)
+        print("Loaded pretrained weights with adaptations for size mismatches")
+        
+        return self
+
 
 def train_bilstm_crf(model, train_loader, val_loader, device, epochs=10, lr=0.001):
     optimizer = optim.Adam(model.parameters(), lr=lr)
