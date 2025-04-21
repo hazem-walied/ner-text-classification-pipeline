@@ -218,9 +218,6 @@ ner-text-classification-pipeline/
 
 ---
 
-## 📄 License
 
-This project is licensed under the MIT License – see the [LICENSE](LICENSE) file for details.
-
-> If you find this project useful, please consider giving it a ⭐
+## If you find this project useful, please consider giving it a ⭐
 
