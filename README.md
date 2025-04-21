@@ -41,6 +41,12 @@ Both traditional and modern techniques are demonstrated:
 - Custom deep learning models in PyTorch
 - End-to-end preprocessing, training, and evaluation workflows
 
+## Project Architecture
+
+Here's a visual overview of the architecture used in this project:
+
+![Project Architecture](./architecture.png)
+
 ---
 
 ## 🧠 Model Architectures
