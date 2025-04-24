@@ -4,7 +4,7 @@ An end-to-end Natural Language Processing pipeline implementing Named Entity Rec
 
 ---
 
-## 🚀 Features
+## Features
 
 - **Named Entity Recognition**: Custom BiLSTM-CRF implementation in PyTorch
 - **Text Classification**: Classical (TF-IDF + SVM) and deep learning models
@@ -14,7 +14,7 @@ An end-to-end Natural Language Processing pipeline implementing Named Entity Rec
 
 ---
 
-## 📚 Table of Contents
+## Table of Contents
 
 1. [Project Overview](#project-overview)
 2. [Model Architectures](#model-architectures)
@@ -28,7 +28,7 @@ An end-to-end Natural Language Processing pipeline implementing Named Entity Rec
 
 ---
 
-## 🔍 Project Overview
+## Project Overview
 
 This project implements a complete NLP pipeline for two fundamental tasks:
 
@@ -49,7 +49,7 @@ Here's a visual overview of the architecture used in this project:
 
 ---
 
-## 🧠 Model Architectures
+## Model Architectures
 
 ### BiLSTM-CRF for NER
 
@@ -67,7 +67,7 @@ Here's a visual overview of the architecture used in this project:
 
 ---
 
-## 💻 Installation
+## Installation
 
 ### Prerequisites
 - Python 3.8+
@@ -95,7 +95,7 @@ python streamlit_app/prepare_data.py
 
 ---
 
-## 📊 Usage
+## Usage
 
 ### Launch Streamlit App
 ```bash
@@ -189,7 +189,7 @@ ner-text-classification-pipeline/
 
 ---
 
-## 📈 Performance
+## Performance
 
 ### NER Results
 | Entity | Precision | Recall | F1-Score |
@@ -208,7 +208,7 @@ ner-text-classification-pipeline/
 
 ---
 
-## 🔮 Future Improvements
+## Future Improvements
 
 - Integrate pre-trained embeddings (GloVe, Word2Vec)
 - Compare with transformer models (BERT, RoBERTa)
