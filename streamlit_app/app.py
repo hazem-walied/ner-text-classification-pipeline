@@ -464,12 +464,6 @@ def main():
                     logits = text_model(text_processed['input_ids'], text_processed['attention_mask'])
                     probs = torch.softmax(logits, dim=1).squeeze().cpu().numpy()
                 
-                # Display results
-                st.subheader("Named Entity Recognition")
-                ner_html = visualize_ner(ner_processed['tokens'], [consolidated_tag_indices], vocab_data['ner_idx2tag'])
-                st.markdown(ner_html, unsafe_allow_html=True)
-                
-                
                 
                 st.subheader("Document Classification")
                 prob_img = plot_classification_probs(probs, vocab_data['class_names'])
@@ -488,8 +482,16 @@ def main():
                     st.write(f"Moderate confidence classification ({confidence:.2f}): The model believes this text belongs to the '{pred_class}' category, but there is some uncertainty.")
                 else:
                     st.write(f"Low confidence classification ({confidence:.2f}): The model is uncertain about the classification. Consider reviewing the text or providing more context.")
+
+                # Display results
+                st.subheader("Named Entity Recognition")
+                ner_html = visualize_ner(ner_processed['tokens'], [consolidated_tag_indices], vocab_data['ner_idx2tag'])
+                st.markdown(ner_html, unsafe_allow_html=True)
+                
+                
         else:
             st.error("Please enter some text to analyze.")
 
 if __name__ == "__main__":
     main()
+    
