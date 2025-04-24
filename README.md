@@ -1,4 +1,4 @@
-# 🧠 NLP Pipeline: Named Entity Recognition & Text Classification
+# NLP Pipeline: Named Entity Recognition & Text Classification
 
 An end-to-end Natural Language Processing pipeline implementing Named Entity Recognition (NER) and Text Classification using both classical machine learning and deep learning approaches. This project demonstrates advanced NLP techniques with a focus on production-ready implementation.
 
